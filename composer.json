@@ -1,0 +1,40 @@
+{
+    "name": "chronhub/storm-aggregate-repository",
+    "description": "Storm Aggregate Repository — persists and reconstitutes aggregates via the event store.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["ddd", "cqrs", "event-sourcing", "aggregate", "repository"],
+    "require": {
+        "php": ">=8.5",
+        "chronhub/storm-chronicler": "self.version",
+        "chronhub/storm-clock": "self.version",
+        "chronhub/storm-contracts": "self.version",
+        "chronhub/storm-message": "self.version",
+        "chronhub/storm-stream": "self.version",
+        "chronhub/storm-support": "self.version",
+        "doctrine/dbal": "^4.0",
+        "symfony/console": "^8.1",
+        "symfony/dependency-injection": "^8.1"
+    },
+    "require-dev": {
+        "chronhub/storm-aggregate": "self.version",
+        "chronhub/storm-serializer": "self.version",
+        "phpstan/phpstan": "^2.2.8",
+        "phpunit/phpunit": "^13.3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Storm\\AggregateRepository\\": "./"
+        },
+        "exclude-from-classmap": [
+            "/Tests/"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Storm\\AggregateRepository\\Tests\\": "Tests/"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
