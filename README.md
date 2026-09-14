@@ -18,7 +18,8 @@ Every command handler does, twice: `retrieve()` the root, decide, `store()` it. 
 - **losing the CAS**: `store()` surfaces Chronicler's `StaleVersion` / `DuplicateVersion` — your
   retry boundary (or the Story bus's) decides what a lost race means;
 - **erasing**: not here — `StreamEraser` (Chronicler) is decorated by this package so the snapshot
-  dies first.
+  dies first; a stream a sweep currently holds refuses the erase with `SnapshotStreamBusy`, before
+  anything is deleted, and your caller retries.
 
 ## Usage
 
@@ -67,7 +68,9 @@ aggregate's own `restoreState` refuses. Snapshots are produced OFF the hot path 
 
 A snapshot is a cache and can never lie about the authoritative stream:
 
-- **it cannot resurrect**: erasing a stream deletes the snapshot FIRST (the eraser decoration);
+- **it cannot resurrect**: erasing a stream deletes the snapshot FIRST (the eraser decoration), and
+  the erase and the sweep of one stream exclude each other (`SnapshotStreamFence`), so a sweep that
+  started before the erase cannot write its replay back after it;
 - **it cannot outrun**: on an empty tail, one head probe catches the orphan (stream erased → full
   replay says null, never a phantom) and the recreation (same id living a new, shorter life →
   discard the stale cache of the dead history);
@@ -86,9 +89,10 @@ follow-up behind a real trigger.
   trigger, off the write path. `--batch` (default 1000, strict positive integer — anything else is
   `INVALID`) caps snapshots taken per aggregate per run; discovery paginates keyset-style past
   failures, so a persistent poison stream costs a warning per run, never the streams sorted behind
-  it. Exit codes: `0` all attempted streams snapshotted, `1` at least one stream failed (isolated +
-  warned — the run still progressed, but your scheduler must see it), `2` invalid option. Run it
-  periodically; re-running is safe.
+  it. Exit codes: `0` no stream failed, `1` at least one stream failed (isolated + warned — the run
+  still progressed, but your scheduler must see it), `2` invalid option. A stream an erase was
+  holding is counted as `deferred`, reported in the summary and left to the next run; it is not a
+  failure and does not turn the exit code. Run it periodically; re-running is safe.
 - **`storm:snapshot:prune-orphans [--batch=N] [--dry-run]`** — removes snapshot rows whose stream
   no longer exists (structural anti-join, never age-based). Same strict `--batch`.
 
@@ -107,6 +111,49 @@ the erased aggregate, or silently pollute a re-created id with the old life's st
 coherence guard and `prune-orphans` are backstops for crash leftovers and hand-managed stores, not
 the mechanism. Projections do not un-project: reset those via the projector, as your own delete
 process composes.
+
+Order alone closes the crash window, not the concurrent one: a sweep already replaying that stream
+would write the old life back after the erase. Both halves therefore run holding the stream's
+`SnapshotStreamFence`, a PostgreSQL transaction-scoped advisory lock the sweep holds too.
+
+**`erase()` can now fail for a reason foreign to the stream.** When a sweep holds the stream, the
+erase raises `SnapshotStreamBusy` BEFORE deleting anything, carrying the stream and asking for a
+retry; nothing was written, and the same call is safe to issue again. The sweep's hold is bounded,
+30 seconds by default, so the retry window is short. A caller driving a deletion process must handle
+that refusal, never record the stream as erased on it. The alternative was a silent skip, which
+turns a deletion that did not happen into a deletion reported as done.
+
+Two properties come from the lock being transaction-scoped. An erase inside your own transaction
+keeps the stream fenced until YOUR commit, so nothing can snapshot it in between. And a failing
+erase rolls the snapshot deletion back with it, provided the failure is allowed to propagate: the
+decorator never absorbs it, and neither should a caller that wants both halves to settle together.
+
+### Requirements and limits
+
+- PostgreSQL 17 or later. The sweep bounds its own transaction with `transaction_timeout`, which is
+  the only Postgres timeout measuring a whole transaction rather than one statement.
+
+- The fence and the sweep must share ONE primary connection, which is what the bundle wires. Two
+  advisory locks taken on two connections fence nothing, and a replica cannot participate at all.
+
+- Only the supported path participates. SQL that deletes a stream by hand, or writes a snapshot row
+  by hand, takes no lock and is not fenced by anything here.
+
+### Deploying it over an existing cache
+
+The fence prevents new incoherent rows; it says nothing about rows already stored. If the past
+integrity of `snapshots` is unknown, the only mechanism that settles it is a full invalidation, and
+it has an order:
+
+1. Deploy the fence FIRST. Purging before it reopens the window the purge was meant to close.
+2. Drain the sweeps: stop the scheduler and let every in-flight run finish. A sweep still open
+   rewrites a row from a replay older than the purge.
+3. Then, and only then, invalidate the cache. Snapshots are reconstructible: a removed row costs one
+   full replay and loses no data.
+
+Storm ships no automatic purge and no application SQL for this. It is an operator decision on an
+operator's data, made once, and its claim is bounded: the race is closed on the supported path and
+the stored state was normalized once, not that every snapshot concern is settled.
 
 ## Contributor doctrine — the load-bearing rules
 

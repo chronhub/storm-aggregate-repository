@@ -88,6 +88,11 @@ final class AggregateRepositoryManagerTest extends TestCase
                 yield from [];
             }
 
+            public function committedHeadPosition(): ?Position
+            {
+                return null;
+            }
+
             public function safeHeadPosition(): ?Position
             {
                 return null;

@@ -19,9 +19,9 @@ use Storm\AggregateRepository\SnapshotRepository;
  * which null already triggers, so the read swallows the corruption instead of leaking it across the
  * port.
  *
- * The corruption is unreachable through the schema: state is `jsonb`, created_at is `timestamptz`,
- * and Postgres rejects both at write, so these mock the DBAL row directly to exercise the defensive
- * branch.
+ * PostgreSQL rejects malformed JSON and timestamps, so those defensive branches use row doubles.
+ * Valid JSON with an invalid state shape remains reachable through the schema. Transaction recovery
+ * after failed cleanup is verified against PostgreSQL in the integration suite.
  */
 final class DbalSnapshotStoreTest extends TestCase
 {
@@ -79,9 +79,8 @@ final class DbalSnapshotStoreTest extends TestCase
     #[Test]
     public function a_failed_discard_still_reads_as_a_cache_miss(): void
     {
-        // a read must stay a read where writes are impossible: on a read-only replica or inside a
-        // read-only transaction the DELETE fails, and the corrupt CACHE row must still degrade to a
-        // miss, never harden into a read failure
+        // This double checks cleanup failure without a caller transaction. PostgreSQL integration
+        // tests exercise recovery of an active transaction before the authoritative replay.
         $connection = $this->createStub(Connection::class);
         $connection->method('fetchAssociative')->willReturn([
             'stream' => 'article-1',

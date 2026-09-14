@@ -75,4 +75,35 @@ final readonly class PersonalDataSnapshotGuard
 
         return is_string($offense) ? $offense : null;
     }
+
+    /**
+     * Earliest stored version recognized by the current personal-data map and its known aliases.
+     *
+     * A null result cannot rule out erased history or aliases absent from the current map.
+     * The category predicate permits partition pruning; the ordered stream index can still scan
+     * every event of a stream whose marked types are sparse or absent.
+     * Stored names use the SQL schema's first-delimiter category rule without current grammar
+     * validation or case normalization, so imported historical spellings remain auditable.
+     *
+     * @throws Exception on a DBAL failure probing the stream's stored types
+     */
+    public function firstMarkedVersion(string $stream): ?int
+    {
+        $marked = [];
+        foreach (array_keys($this->map) as $class) {
+            $marked = [...$marked, ...$this->mapper->storedTypesOf($class)];
+        }
+
+        if ($marked === []) {
+            return null;
+        }
+
+        $version = $this->connection->fetchOne(
+            'SELECT version FROM event_store WHERE category = :category AND stream = :stream AND type IN (:types) ORDER BY version LIMIT 1',
+            ['category' => explode('-', $stream, 2)[0], 'stream' => $stream, 'types' => $marked],
+            ['types' => ArrayParameterType::STRING],
+        );
+
+        return $version === false ? null : (int) $version;
+    }
 }

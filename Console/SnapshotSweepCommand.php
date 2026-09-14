@@ -11,6 +11,7 @@ use Storm\AggregateRepository\Exception\UnknownAggregate;
 use Storm\AggregateRepository\Snapshot\PersonalDataSnapshotGuard;
 use Storm\AggregateRepository\Snapshot\Snapshot;
 use Storm\AggregateRepository\Snapshot\SnapshotStore;
+use Storm\AggregateRepository\Snapshot\SnapshotStreamFence;
 use Storm\Clock\PointInTime;
 use Storm\Contracts\Aggregate\AggregateIdentity;
 use Storm\Contracts\Aggregate\AggregateRepository;
@@ -44,9 +45,10 @@ use Throwable;
  * poison costs a warning and a slot of scan, never the starvation of everything sorted behind it;
  * the next run picks up the rest.
  *
- * Exit code is honest for a scheduler: SUCCESS only when every attempted stream snapshotted;
- * FAILURE when at least one stream failed. Each failure is isolated, warned and skipped, so the run
- * still makes progress, but a cron/K8s/alerting must see it was not clean.
+ * Exit code is honest for a scheduler: SUCCESS when no stream failed, FAILURE when at least one did.
+ * Each failure is isolated, warned and skipped, so the run still makes progress, but a cron/K8s/alerting
+ * must see it was not clean. A stream an erase was holding is reported as deferred and leaves the code
+ * alone; it was not swept and nothing failed, and the next run finds it in the stale set again.
  *
  * Examples:
  *
@@ -78,6 +80,7 @@ final class SnapshotSweepCommand extends Command
         private readonly array $aggregates,
         private readonly AggregateRepositoryManager $manager,
         private readonly SnapshotStore $snapshots,
+        private readonly SnapshotStreamFence $fence,
         private readonly Clock $clock,
         /**
          * The crypto-shredding exclusion: a stream folding a `#[Personal]` event refuses its
@@ -121,6 +124,7 @@ final class SnapshotSweepCommand extends Command
 
         $total = 0;
         $failed = 0;
+        $postponed = 0;
 
         foreach ($this->aggregates as $class => $config) {
             // The `snapshot` block is the sweep opt-in; the interface guards reconstitution.
@@ -131,7 +135,7 @@ final class SnapshotSweepCommand extends Command
             $repository = $this->manager->for($class);
             $snapshot = $config['snapshot'];
 
-            [$taken, $skipped] = $this->sweep(
+            [$taken, $skipped, $deferred] = $this->sweep(
                 $io,
                 $config['category'],
                 $config['id'],
@@ -143,21 +147,32 @@ final class SnapshotSweepCommand extends Command
                 $batch,
             );
 
-            if ($taken > 0 || $skipped > 0) {
-                $io->writeln(sprintf('  %s: %d snapshot(s), %d skipped', $class, $taken, $skipped));
+            if ($taken > 0 || $skipped > 0 || $deferred > 0) {
+                $io->writeln(sprintf('  %s: %d snapshot(s), %d skipped, %d deferred', $class, $taken, $skipped, $deferred));
             }
 
             $total += $taken;
             $failed += $skipped;
+            $postponed += $deferred;
         }
 
+        // A deferral is not a failure and must not read as one: the stream was held by an erase, the
+        // sweep declined to fight it, and the next run takes it. Only a skip means something went
+        // wrong, so the exit code answers to skips alone while the deferral count stays visible.
         if ($failed > 0) {
-            $io->warning(sprintf('Sweep finished DIRTY: %d snapshot(s) taken, %d stream(s) failed and were skipped — see the warnings above.', $total, $failed));
+            $io->warning(sprintf(
+                'Sweep finished DIRTY: %d snapshot(s) taken, %d stream(s) failed and were skipped, %d deferred behind a concurrent erase — see the warnings above.',
+                $total,
+                $failed,
+                $postponed,
+            ));
 
             return Command::FAILURE;
         }
 
-        $io->success(sprintf('Sweep complete: %d snapshot(s) taken.', $total));
+        $io->success($postponed > 0
+            ? sprintf('Sweep complete: %d snapshot(s) taken, %d stream(s) deferred behind a concurrent erase and left to the next run.', $total, $postponed)
+            : sprintf('Sweep complete: %d snapshot(s) taken.', $total));
 
         return Command::SUCCESS;
     }
@@ -184,10 +199,17 @@ final class SnapshotSweepCommand extends Command
      * re-warning per stream would repeat the same verdict once per row, which is how a good message
      * becomes an unreadable wall.
      *
+     * The replay and the save of one stream run holding that stream's fence, in a transaction the
+     * fence owns and bounds, so an erase of the same stream cannot slip between the two and be
+     * undone by the save. A stream an erase already holds is DEFERRED: it is not swept, not warned
+     * and not counted as a failure, since nothing went wrong and the stale set will offer it again on
+     * the next run. Contention is the expected shape of this fence, so treating it as an incident
+     * would train a scheduler to ignore the exit code that reports real ones.
+     *
      * @param  class-string<AggregateIdentity>  $idClass
      * @param  AggregateRepository<AggregateIdentity, AggregateRoot<AggregateIdentity>>  $repository
      * @param  class-string  $class
-     * @return array{int, int} snapshots taken, streams skipped on failure
+     * @return array{int, int, int} snapshots taken, streams skipped on failure, streams deferred behind an erase
      *
      * @throws Throwable on a storage failure of the stale-streams read
      */
@@ -195,6 +217,7 @@ final class SnapshotSweepCommand extends Command
     {
         $taken = 0;
         $skipped = 0;
+        $deferred = 0;
         $examined = 0;
         $ceiling = $batch * self::WORK_FACTOR;
         $after = null;
@@ -220,28 +243,51 @@ final class SnapshotSweepCommand extends Command
                     // is refused loud, counted as a skip so the run exits FAILURE, and it ends the
                     // aggregate's sweep for this run, one verdict for the class instead of one
                     // warning per stream
-                    $offense = $this->guard?->refusal($stream);
-                    if ($offense !== null) {
+                    if ($this->refusePersonalSnapshot($stream, $class, $io)) {
                         $skipped++;
-                        $io->warning(sprintf(
-                            'REFUSED %s, and the rest of its category this run: it folds #[Personal] event type [%s] — a snapshot would persist decrypted personal state that no forget can reach. Remove the `snapshot` block for %s; the price of PII in state is full replay (snapshot encryption is the designed v2).',
-                            $stream,
-                            $offense,
-                            $class,
-                        ));
 
-                        return [$taken, $skipped];
+                        return [$taken, $skipped, $deferred];
                     }
 
+                    // parsed OUTSIDE the fence: a qualifier that is not an identity is a bug to
+                    // report, and holding an erase off the stream to discover it would be a wait
+                    // paid for nothing
                     $id = $idClass::fromString((string) new StreamName($stream)->qualifier);
-                    $aggregate = $repository->retrieve($id);
 
-                    if (! $aggregate instanceof SnapshotableAggregateRoot) {
-                        continue; // gone / not snapshotable, nothing to cache
+                    $refused = false;
+                    $saved = false;
+
+                    $held = $this->fence->tryBounded($stream, function () use ($repository, $id, $stream, $class, $io, &$refused, &$saved): void {
+                        $aggregate = $repository->retrieve($id);
+
+                        if (! $aggregate instanceof SnapshotableAggregateRoot) {
+                            return; // gone / not snapshotable, nothing to cache
+                        }
+
+                        // A marked event can commit between the first probe and the replay.
+                        if ($this->refusePersonalSnapshot($stream, $class, $io)) {
+                            $refused = true;
+
+                            return;
+                        }
+
+                        $this->snapshots->save(new Snapshot($stream, $class, $aggregate->version(), $aggregate->toSnapshot(), $this->clock->now()));
+                        $saved = true;
+                    });
+
+                    if ($refused) {
+                        $skipped++;
+
+                        return [$taken, $skipped, $deferred];
                     }
 
-                    $this->snapshots->save(new Snapshot($stream, $class, $aggregate->version(), $aggregate->toSnapshot(), $this->clock->now()));
-                    $taken++;
+                    if (! $held) {
+                        $deferred++; // an erase holds the stream; nothing failed, the next run takes it
+                    } elseif ($saved) {
+                        // counted only once the fence's transaction committed, so a save that rolls
+                        // back is reported by the catch below and never as a snapshot taken
+                        $taken++;
+                    }
                 } catch (Throwable $e) {
                     // the catch stays broad on purpose, that is what keeps one poison from starving the
                     // streams behind it, but the two natures are not the same news: an SPL LogicException
@@ -259,6 +305,28 @@ final class SnapshotSweepCommand extends Command
             }
         }
 
-        return [$taken, $skipped];
+        return [$taken, $skipped, $deferred];
+    }
+
+    /**
+     * Probes committed event types again on every call and reports a refusal.
+     *
+     * @phpstan-impure
+     */
+    private function refusePersonalSnapshot(string $stream, string $class, SymfonyStyle $io): bool
+    {
+        $offense = $this->guard?->refusal($stream);
+        if ($offense === null) {
+            return false;
+        }
+
+        $io->warning(sprintf(
+            'REFUSED %s, and the rest of its category this run: it folds #[Personal] event type [%s] — a snapshot would persist decrypted personal state that no forget can reach. Remove the `snapshot` block for %s; the price of PII in state is full replay (snapshot encryption is the designed v2).',
+            $stream,
+            $offense,
+            $class,
+        ));
+
+        return true;
     }
 }

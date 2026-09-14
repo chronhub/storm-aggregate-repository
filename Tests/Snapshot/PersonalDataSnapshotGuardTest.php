@@ -135,4 +135,36 @@ final class PersonalDataSnapshotGuardTest extends TestCase
 
         $this->assertNull($guard->refusal('account-42'));
     }
+
+    #[Test]
+    public function the_audit_probe_keeps_partition_pruning_and_all_marked_classes_and_aliases(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->once())->method('fetchOne')
+            ->with(
+                $this->anything(),
+                [
+                    'category' => 'account',
+                    'stream' => 'account-42',
+                    'types' => ['article.drafted', 'article.written', self::MARKED, 'article.published', self::OTHER],
+                ],
+                ['types' => ArrayParameterType::STRING],
+            )
+            ->willReturn('7');
+        $guard = new PersonalDataSnapshotGuard($connection, $this->mapperWithFormerAliases(), [
+            self::MARKED => ['subject' => 'articleId', 'keys' => ['title'], 'fallbacks' => []],
+            self::OTHER => ['subject' => 'articleId', 'keys' => ['body'], 'fallbacks' => []],
+        ]);
+
+        self::assertSame(7, $guard->firstMarkedVersion('account-42'));
+    }
+
+    #[Test]
+    public function the_audit_probe_skips_the_database_when_no_class_is_marked(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->never())->method('fetchOne');
+
+        self::assertNull(new PersonalDataSnapshotGuard($connection, new IdentityEventTypeMapper)->firstMarkedVersion('account-42'));
+    }
 }

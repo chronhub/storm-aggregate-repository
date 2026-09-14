@@ -55,9 +55,7 @@ final class AggregateRepositoryManager
      */
     public function for(string $aggregateClass): AggregateRepository
     {
-        if (! isset($this->repositories[$aggregateClass])) {
-            $this->repositories[$aggregateClass] = $this->build($aggregateClass);
-        }
+        $this->repositories[$aggregateClass] ??= $this->build($aggregateClass);
 
         /** @var AggregateRepository<TId, T> */
         return $this->repositories[$aggregateClass];
