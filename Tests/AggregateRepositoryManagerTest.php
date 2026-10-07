@@ -56,6 +56,14 @@ final class AggregateRepositoryManagerTest extends TestCase
     }
 
     #[Test]
+    public function refuses_an_inspector_for_an_unconfigured_aggregate(): void
+    {
+        $this->expectException(UnknownAggregate::class);
+
+        $this->managerFor([])->inspectorFor(SnapshotArticle::class);
+    }
+
+    #[Test]
     public function wraps_a_snapshotable_aggregate_in_a_snapshot_repository(): void
     {
         $manager = $this->managerFor([SnapshotArticle::class => ['id' => ArticleId::class, 'category' => 'article']]);

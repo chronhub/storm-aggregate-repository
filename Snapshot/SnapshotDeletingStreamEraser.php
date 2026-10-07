@@ -66,6 +66,8 @@ final readonly class SnapshotDeletingStreamEraser implements StreamEraser
     public function erase(StreamName $streamName): int
     {
         $stream = $streamName->toString();
+        // @infection-ignore-all; equivalent: the fence answers true only after running the work, which
+        // overwrites this count, and a false answer throws below; the initial value is never returned
         $erased = 0;
 
         $held = $this->fence->tryWithin($stream, function () use ($stream, $streamName, &$erased): void {

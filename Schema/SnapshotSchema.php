@@ -15,12 +15,19 @@ namespace Storm\AggregateRepository\Schema;
  *
  * - `created_at` is when it was taken, read by the time-based sweep.
  *
- * `PRIMARY KEY (stream)` matches `stream_heads.stream` in TYPE and in COLLATION, so the sweep's
- * `stream_heads` join with `snapshots` is index-optimal. The `COLLATE "C"` is half of a pair and
- * carries no meaning alone: a comparison between one pinned side and one default side resolves to
- * the pinned collation, and an index built under the other one can no longer serve it. Measured, the
- * mismatch turns the per-row probe into a full scan of `snapshots`, whose cost then follows the size
- * of the whole store rather than the batch asked for. Unpin one side only by unpinning both. Idempotent via `IF NOT EXISTS`; Ledger aggregates it into
+ * `PRIMARY KEY (stream)` matches `stream_heads.stream` in TYPE and in COLLATION, so every comparison
+ * of the two columns is index-optimal. The `COLLATE "C"` is half of a pair and carries no meaning
+ * alone:
+ *
+ * - A comparison between one pinned side and one default side resolves to the pinned collation, the
+ *   rows stay right, and an index built under the other one can no longer serve it. Measured, the
+ *   mismatch turns the per-row probe into a full scan of `snapshots`, whose cost then follows the
+ *   size of the whole store rather than the batch asked for.
+ *
+ * - A comparison between one pinned side and another named collation resolves to none, and
+ *   PostgreSQL refuses the query.
+ *
+ * Unpin one side only by unpinning both. Idempotent via `IF NOT EXISTS`; Ledger aggregates it into
  * `storm:install`.
  *
  * Deliberately NO foreign key to `stream_heads`; the topological option was weighed and not taken.
@@ -38,7 +45,7 @@ final class SnapshotSchema
     public static function up(): array
     {
         return [
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             <<<'SQL'
                 CREATE TABLE IF NOT EXISTS snapshots (
                     stream         text           COLLATE "C" NOT NULL,
@@ -58,7 +65,7 @@ final class SnapshotSchema
     public static function down(): array
     {
         return [
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             'DROP TABLE IF EXISTS snapshots',
         ];
     }

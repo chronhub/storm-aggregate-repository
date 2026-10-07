@@ -53,6 +53,15 @@ final class SnapshotTest extends TestCase
     }
 
     #[Test]
+    public function refuses_a_nbsp_only_stream(): void
+    {
+        // a no-break space survives the ASCII trim of the guard, then renders empty as a snapshot key
+        $this->expectException(InvalidArgumentException::class);
+
+        new Snapshot("\u{00A0}", 'Article', 1, [], PointInTime::from('2024-01-01T10:00:00.000000+00:00'));
+    }
+
+    #[Test]
     #[Group('adversarial')]
     public function refuses_a_list_state(): void
     {

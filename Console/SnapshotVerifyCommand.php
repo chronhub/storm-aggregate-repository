@@ -6,15 +6,16 @@ namespace Storm\AggregateRepository\Console;
 
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
-use Generator;
 use JsonException;
 use Override;
-use Storm\AggregateRepository\AggregateHistoryReplay;
+use Storm\AggregateRepository\HistoricalAggregateInspector;
 use Storm\Chronicler\Store\StreamReader;
 use Storm\Contracts\Aggregate\AggregateIdentity;
 use Storm\Contracts\Aggregate\SnapshotableAggregateRoot;
+use Storm\Stream\StreamCategory;
 use Storm\Stream\StreamName;
 use Storm\Support\Console\PositiveIntOption;
+use Storm\Support\Text\Str;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -100,61 +101,96 @@ final class SnapshotVerifyCommand extends Command
 
             return Command::INVALID;
         }
-        $category = $input->getOption('category');
-        $category = is_string($category) && $category !== '' ? $category : null;
-        $after = $input->getOption('after');
-        $after = is_string($after) && $after !== '' ? $after : null;
-        $json = $input->getOption('json') === true;
+        $category = Str::nonEmptyOrNull($input->getOption('category'));
+        $after = Str::nonEmptyOrNull($input->getOption('after'));
 
-        // the category filter is a KEY RANGE on the primary key, [category-, category.), `.` being
-        // the successor byte of `-`, read in bytes under the column's C collation: one contiguous
-        // index slice, a dash inside the category included; the cursor seeds the lower bound
+        $rows = $this->fetchSample($category, $after, $sample);
+
+        $report = ['verified' => 0, 'lying' => [], 'orphaned' => 0, 'last' => $rows === [] ? null : array_last($rows)['stream']];
+        foreach ($rows as $row) {
+            if ($row['orphaned']) {
+                $report['orphaned']++;
+
+                continue;
+            }
+            $version = (int) $row['version'];
+            $lie = $this->verify($row['stream'], $row['aggregate_type'], $version, (string) $row['state']);
+            if ($lie === null) {
+                $report['verified']++;
+            } else {
+                $report['lying'][] = ['stream' => $row['stream'], 'version' => $version, 'reason' => $lie];
+            }
+        }
+
+        if ($input->getOption('json') === true) {
+            $output->writeln(json_encode($report, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        } else {
+            $this->printSummary($io, $report, $sample);
+        }
+
+        return $report['lying'] === [] ? Command::SUCCESS : Command::FAILURE;
+    }
+
+    /**
+     * The next page of snapshots in stream order, each flagged when its stream head is gone.
+     *
+     * @return list<array{stream: string, aggregate_type: string, version: int|string, state: string, orphaned: bool}>
+     */
+    private function fetchSample(?string $category, ?string $after, int $sample): array
+    {
+        // a category is the key range [category-, category.). `.` is the byte right after `-`, so
+        // the range only holds in bytes: the comparisons and the order name `COLLATE "C"` as the
+        // column does, one contiguous index slice on the pinned column and still the right range on
+        // a column whose collation has drifted. The join names none, its two columns being a pair:
+        // its rows stay right while both drift together or one falls to the database default, and
+        // PostgreSQL refuses the query when one side carries another named collation
         $lower = $category === null ? '' : $category.'-';
+        // the cursor only moves the lower bound forward; PHP compares these strings bytewise too
         if ($after !== null && $after > $lower) {
             $lower = $after;
         }
 
-        /** @var list<array{stream: string, aggregate_type: string, version: int|string, state: string, orphaned: bool}> $rows */
-        $rows = $this->connection->fetchAllAssociative(
+        $sql =
             /* language=PostgreSQL */
             'SELECT s.stream, s.aggregate_type, s.version, s.state, (h.stream IS NULL) AS orphaned
              FROM snapshots s LEFT JOIN stream_heads h ON h.stream = s.stream
-             WHERE s.stream > :lower'
-            .($category === null ? '' : ' AND s.stream < :upper')
-            .' ORDER BY s.stream LIMIT :sample',
-            ['lower' => $lower, 'sample' => $sample] + ($category === null ? [] : ['upper' => $category.'.']),
-            ['sample' => ParameterType::INTEGER],
+             WHERE s.stream COLLATE "C" > :lower';
+        $params = ['lower' => $lower, 'sample' => $sample];
+        if ($category !== null) {
+            $sql .= ' AND s.stream COLLATE "C" < :upper';
+            $params['upper'] = $category.'.';
+        }
+
+        /** @var list<array{stream: string, aggregate_type: string, version: int|string, state: string, orphaned: bool}> */
+        return $this->connection->fetchAllAssociative($sql.' ORDER BY s.stream COLLATE "C" LIMIT :sample', $params, ['sample' => ParameterType::INTEGER]);
+    }
+
+    /**
+     * @param  array{verified: int, lying: list<array{stream: string, version: int, reason: string}>, orphaned: int, last: ?string}  $report
+     */
+    private function printSummary(SymfonyStyle $io, array $report, int $sample): void
+    {
+        $lying = $report['lying'];
+        if ($lying !== []) {
+            $io->table(
+                ['Stream', 'Version', 'Lie'],
+                array_map(static fn (array $lie): array => [$lie['stream'], (string) $lie['version'], $lie['reason']], $lying),
+            );
+        }
+
+        $line = sprintf(
+            '%d verified, %d lying, %d orphaned (sample of %d%s).',
+            $report['verified'],
+            count($lying),
+            $report['orphaned'],
+            $sample,
+            $report['last'] === null ? '' : ', last '.$report['last'],
         );
-        $last = $rows === [] ? null : array_last($rows)['stream'];
-
-        $verified = 0;
-        $orphaned = 0;
-        $lying = [];
-        foreach ($rows as $row) {
-            if ($row['orphaned']) {
-                $orphaned++;
-
-                continue;
-            }
-            $verdict = $this->verify($row['stream'], $row['aggregate_type'], (int) $row['version'], (string) $row['state']);
-            if ($verdict === null) {
-                $verified++;
-            } else {
-                $lying[] = ['stream' => $row['stream'], 'version' => (int) $row['version'], 'reason' => $verdict];
-            }
-        }
-
-        if ($json) {
-            $output->writeln(json_encode(['verified' => $verified, 'lying' => $lying, 'orphaned' => $orphaned, 'last' => $last], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        if ($lying === []) {
+            $io->success($line);
         } else {
-            if ($lying !== []) {
-                $io->table(['Stream', 'Version', 'Lie'], array_map(static fn (array $lie): array => [$lie['stream'], (string) $lie['version'], $lie['reason']], $lying));
-            }
-            $line = sprintf('%d verified, %d lying, %d orphaned (sample of %d%s).', $verified, count($lying), $orphaned, $sample, $last === null ? '' : ', last '.$last);
-            $lying === [] ? $io->success($line) : $io->error($line.' A lying snapshot is discarded by hand; the sweep retakes it.');
+            $io->error($line.' A lying snapshot is discarded by hand; the sweep retakes it.');
         }
-
-        return $lying === [] ? Command::SUCCESS : Command::FAILURE;
     }
 
     /**
@@ -172,41 +208,52 @@ final class SnapshotVerifyCommand extends Command
         }
         try {
             $id = $config['id']::fromString((string) new StreamName($stream)->qualifier);
-            $aggregate = $aggregateType::reconstitute($id, AggregateHistoryReplay::validated($aggregateType, $id, $this->upTo($stream, $version), 0));
+            // the repository's own bounded fold up to the snapshot version, lenient on a short
+            // stream so the verdict below can name how far the stream still reaches
+            $refold = new HistoricalAggregateInspector($aggregateType, $config['id'], new StreamCategory($config['category']), $this->streamReader)
+                ->foldUpTo($id, $version);
         } catch (Throwable $e) {
             return sprintf('the refold failed (%s)', $e::class);
         }
-        if ($aggregate === null || $aggregate->version() !== $version) {
-            return sprintf('the stream holds %d event(s) below the snapshot version', $aggregate?->version() ?? 0);
+        if ($refold === null || $refold->version !== $version) {
+            return sprintf('the stream holds %d event(s) below the snapshot version', $refold->version ?? 0);
+        }
+        try {
+            $stored = json_decode($state, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return 'the stored state is not valid JSON';
+        }
+        // jsonb holds any JSON value; the store reads anything but a keyed bag as a corrupt row
+        if (! is_array($stored) || ($stored !== [] && array_is_list($stored))) {
+            return 'the stored state is not a JSON object';
         }
         /** @var array<string, mixed> $stored */
-        $stored = json_decode($state, true, 512, JSON_THROW_ON_ERROR);
-        unset($stored['_snapshot_version']);
-        $folded = $aggregate->toSnapshot();
-        unset($folded['_snapshot_version']);
-        $differing = [];
-        foreach (array_unique([...array_keys($stored), ...array_keys($folded)]) as $key) {
-            if (! array_key_exists($key, $stored) || ! array_key_exists($key, $folded) || $this->canonical($stored[$key]) !== $this->canonical($folded[$key])) {
-                $differing[] = (string) $key;
-            }
-        }
+        $differing = $this->differingKeys($stored, $refold->state);
 
         return $differing === [] ? null : 'state differs from the refold on '.implode(', ', $differing);
     }
 
     /**
-     * The stream's records up to and including the snapshot's version, read lazily and left there.
-     *
-     * @return Generator<mixed>
+     * @param  array<string, mixed>  $stored
+     * @param  array<string, mixed>  $folded
+     * @return list<string>
      */
-    private function upTo(string $stream, int $version): Generator
+    private function differingKeys(array $stored, array $folded): array
     {
-        foreach ($this->streamReader->retrieveAll(new StreamName($stream)) as $record) {
-            if ($record->message->aggregateVersion() > $version) {
-                break;
+        // a stale `_snapshot_version` is invalidated on load, so it is never a lie
+        unset($stored['_snapshot_version'], $folded['_snapshot_version']);
+
+        $differing = [];
+        foreach (array_unique([...array_keys($stored), ...array_keys($folded)]) as $key) {
+            $same = array_key_exists($key, $stored)
+                && array_key_exists($key, $folded)
+                && $this->canonical($stored[$key]) === $this->canonical($folded[$key]);
+            if (! $same) {
+                $differing[] = (string) $key;
             }
-            yield $record;
         }
+
+        return $differing;
     }
 
     private function canonical(mixed $value): string

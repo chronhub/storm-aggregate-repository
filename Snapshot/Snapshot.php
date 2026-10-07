@@ -7,6 +7,7 @@ namespace Storm\AggregateRepository\Snapshot;
 use InvalidArgumentException;
 use Storm\AggregateRepository\SnapshotRepository;
 use Storm\Clock\PointInTime;
+use Storm\Support\Text\Str;
 
 /**
  * A stored snapshot: the cached state of one aggregate at a version. An infrastructure envelope
@@ -44,7 +45,7 @@ final readonly class Snapshot
         public array $state,
         public PointInTime $createdAt,
     ) {
-        if (trim($stream) === '' || trim($aggregateType) === '') {
+        if (Str::isBlank($stream) || Str::isBlank($aggregateType)) {
             throw new InvalidArgumentException('A snapshot names its stream and its aggregate type — blank keys cannot be stored nor matched back.');
         }
 

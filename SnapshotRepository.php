@@ -20,6 +20,7 @@ use Storm\Contracts\Aggregate\InvalidSnapshotState;
 use Storm\Contracts\Aggregate\SnapshotableAggregateRoot;
 use Storm\Contracts\Clock\ClockExceptionContract;
 use Storm\Contracts\Serializer\SerializationExceptionContract;
+use Storm\Stream\StreamCategory;
 use Storm\Stream\StreamName;
 use Throwable;
 
@@ -53,7 +54,7 @@ final readonly class SnapshotRepository implements AggregateRepository
         private StreamHeadStore $heads,
         private string $aggregateClass,
         private string $idClass,
-        private string $category,
+        private StreamCategory $category,
     ) {}
 
     public function store(AggregateRoot $aggregate): void
@@ -78,7 +79,7 @@ final readonly class SnapshotRepository implements AggregateRepository
             throw AggregateTypeMismatch::id($this->idClass, $id::class);
         }
 
-        $stream = new StreamName($this->category)->withQualifier($id->toString())->toString();
+        $stream = new StreamName($this->category->value)->withQualifier($id->toString())->toString();
 
         // the snapshot load is a read too: the port reserves Throwable for a storage failure, so any
         // conforming adapter's failure crosses as the contracted StorageFailure, not raw, the same

@@ -34,6 +34,7 @@ use Storm\Message\Message;
 use Storm\Message\MessageEnricher;
 use Storm\Serializer\Exception\SerializationException;
 use Storm\Stream\Stream;
+use Storm\Stream\StreamCategory;
 use Throwable;
 
 final class DefaultAggregateRepositoryTest extends TestCase
@@ -56,7 +57,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         $repository = new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $eventStore,
             $this->createStub(DecisionAppend::class),
             $this->createStub(MessageEnricher::class),
@@ -96,7 +97,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         $repository = new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $eventStore,
             $this->createStub(DecisionAppend::class),
             $this->createStub(MessageEnricher::class),
@@ -121,7 +122,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         $repository = new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $eventStore,
             $this->createStub(DecisionAppend::class),
             $this->createStub(MessageEnricher::class),
@@ -145,7 +146,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $this->createStub(StreamReader::class),
             $eventStore,
             $this->createStub(MessageEnricher::class),
@@ -181,7 +182,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $this->createStub(StreamReader::class),
             $append,
             self::identityEnricher(),
@@ -220,7 +221,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
             new DefaultAggregateRepository(
                 Article::class,
                 ArticleId::class,
-                'article',
+                new StreamCategory('article'),
                 $this->createStub(StreamReader::class),
                 $append,
                 self::identityEnricher(),
@@ -256,7 +257,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
             new DefaultAggregateRepository(
                 Article::class,
                 ArticleId::class,
-                'article',
+                new StreamCategory('article'),
                 $this->createStub(StreamReader::class),
                 $append,
                 self::identityEnricher(),
@@ -288,7 +289,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $this->createStub(StreamReader::class),
             $append,
             self::identityEnricher(),
@@ -326,7 +327,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         $repository = new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $eventStore,
             $append,
             self::identityEnricher(),
@@ -420,7 +421,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         $repository = new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $eventStore,
             $this->createStub(DecisionAppend::class),
             $this->createStub(MessageEnricher::class),
@@ -544,7 +545,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         return new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $eventStore,
             new class() implements DecisionAppend
             {
@@ -584,7 +585,7 @@ final class DefaultAggregateRepositoryTest extends TestCase
         $repository = new DefaultAggregateRepository(
             Article::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
             $this->createStub(StreamReader::class),
             $append,
             new class() implements MessageEnricher

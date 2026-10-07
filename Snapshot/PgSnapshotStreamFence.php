@@ -149,7 +149,7 @@ final readonly class PgSnapshotStreamFence implements SnapshotStreamFence
     private function hold(Connection $connection, string $stream, Closure $work, bool $ambient): bool
     {
         $row = $connection->fetchNumeric(
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             "SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0)), current_setting('transaction_isolation')",
             ['key' => self::KEY_NAMESPACE.$stream],
         );

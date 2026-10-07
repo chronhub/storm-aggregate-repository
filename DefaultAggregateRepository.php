@@ -22,6 +22,7 @@ use Storm\Message\Message;
 use Storm\Message\MessageEnricher;
 use Storm\Stream\Exception\InvalidStreamException;
 use Storm\Stream\Stream;
+use Storm\Stream\StreamCategory;
 use Storm\Stream\StreamName;
 
 /**
@@ -53,7 +54,7 @@ final readonly class DefaultAggregateRepository implements AggregateRepository
     public function __construct(
         private string $aggregateClass,
         private string $idClass,
-        private string $category,
+        private StreamCategory $category,
         private StreamReader $streamReader,
         private DecisionAppend $decisionAppend,
         private MessageEnricher $enricher,
@@ -147,6 +148,6 @@ final readonly class DefaultAggregateRepository implements AggregateRepository
      */
     private function streamNameFor(AggregateIdentity $id): StreamName
     {
-        return new StreamName($this->category)->withQualifier($id->toString());
+        return new StreamName($this->category->value)->withQualifier($id->toString());
     }
 }

@@ -16,6 +16,7 @@ use Storm\Contracts\Aggregate\CorruptAggregateHistory as CorruptAggregateHistory
  * - Versions must run contiguously, from 1 on a full replay or from the snapshot version plus one on a tail
  * - Every record must carry its version header
  * - Every event's own aggregate id must name the stream's aggregate
+ * - A bounded historical read must reach the version its observed stream head has already passed
  *
  * A violation is a data-integrity alarm, whether a truncated read, a foreign row or a record with no
  * version header, never state to replay: a decision on it could pass the store's CAS and become a
@@ -46,6 +47,17 @@ final class CorruptStreamHistory extends RuntimeException implements CorruptAggr
             $aggregateId,
             $eventClass,
             $expected,
+        ));
+    }
+
+    public static function incompleteHistory(string $aggregateClass, string $aggregateId, int $requested, int $reached): self
+    {
+        return new self(sprintf(
+            'The stream of %s (id %s) stops at version %d while its head claims at least version %d; a history that ends short of a version the head has passed is truncated, and a state folded from it would be served as a version it never was.',
+            $aggregateClass,
+            $aggregateId,
+            $reached,
+            $requested,
         ));
     }
 

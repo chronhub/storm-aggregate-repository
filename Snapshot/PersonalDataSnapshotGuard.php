@@ -57,17 +57,14 @@ final readonly class PersonalDataSnapshotGuard
             return null;
         }
 
-        $marked = [];
-        foreach (array_keys($this->map) as $class) {
-            // every alias the class may be stored under, former spellings included: an old row
-            // under a replaced alias is still the same personal data
-            $marked = [...$marked, ...$this->mapper->storedTypesOf($class)];
-        }
+        // every alias the class may be stored under, former spellings included: an old row
+        // under a replaced alias is still the same personal data
+        $marked = array_merge(...array_map($this->mapper->storedTypesOf(...), array_keys($this->map)));
 
         // the stream name implies its category, but event_store is partitioned BY LIST (category):
         // the redundant-looking predicate is what lets the planner prune the probe to ONE partition
         $offense = $this->connection->fetchOne(
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             'SELECT type FROM event_store WHERE category = :category AND stream = :stream AND type IN (:types) LIMIT 1',
             ['category' => new StreamName($stream)->category, 'stream' => $stream, 'types' => $marked],
             ['types' => ArrayParameterType::STRING],
@@ -89,10 +86,7 @@ final readonly class PersonalDataSnapshotGuard
      */
     public function firstMarkedVersion(string $stream): ?int
     {
-        $marked = [];
-        foreach (array_keys($this->map) as $class) {
-            $marked = [...$marked, ...$this->mapper->storedTypesOf($class)];
-        }
+        $marked = array_merge([], ...array_map($this->mapper->storedTypesOf(...), array_keys($this->map)));
 
         if ($marked === []) {
             return null;
@@ -100,7 +94,7 @@ final readonly class PersonalDataSnapshotGuard
 
         $version = $this->connection->fetchOne(
             'SELECT version FROM event_store WHERE category = :category AND stream = :stream AND type IN (:types) ORDER BY version LIMIT 1',
-            ['category' => explode('-', $stream, 2)[0], 'stream' => $stream, 'types' => $marked],
+            ['category' => array_first(explode('-', $stream)), 'stream' => $stream, 'types' => $marked],
             ['types' => ArrayParameterType::STRING],
         );
 

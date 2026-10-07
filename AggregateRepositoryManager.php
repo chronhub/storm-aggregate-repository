@@ -14,6 +14,7 @@ use Storm\Contracts\Aggregate\AggregateRepository;
 use Storm\Contracts\Aggregate\AggregateRoot;
 use Storm\Contracts\Aggregate\SnapshotableAggregateRoot;
 use Storm\Message\MessageEnricher;
+use Storm\Stream\StreamCategory;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
@@ -62,6 +63,27 @@ final class AggregateRepositoryManager
     }
 
     /**
+     * A read-only historical inspector for one declared snapshotable aggregate.
+     *
+     * Built from the same declaration as `for()` but outside its repository cache: the inspector
+     * carries the stream reader alone, never the append port, the enricher or the snapshot store.
+     *
+     * @param  class-string<SnapshotableAggregateRoot<AggregateIdentity>>  $aggregateClass
+     *
+     * @throws UnknownAggregate when the class is not declared under `storm.aggregates`.
+     */
+    public function inspectorFor(string $aggregateClass): HistoricalAggregateInspector
+    {
+        if (! isset($this->aggregates[$aggregateClass])) {
+            throw UnknownAggregate::notConfigured($aggregateClass);
+        }
+
+        $config = $this->aggregates[$aggregateClass];
+
+        return new HistoricalAggregateInspector($aggregateClass, $config['id'], new StreamCategory($config['category']), $this->streamReader);
+    }
+
+    /**
      * @param  class-string<AggregateRoot<AggregateIdentity>>  $aggregateClass
      * @return AggregateRepository<AggregateIdentity, AggregateRoot<AggregateIdentity>>
      *
@@ -78,7 +100,7 @@ final class AggregateRepositoryManager
         $repository = new DefaultAggregateRepository(
             $aggregateClass,
             $config['id'],
-            $config['category'],
+            new StreamCategory($config['category']),
             $this->streamReader,
             $this->decisionAppend,
             $this->enricher,
@@ -87,7 +109,7 @@ final class AggregateRepositoryManager
         // Implementing SnapshotableAggregateRoot is the opt-in: wrap for snapshot-accelerated reads.
         if (is_subclass_of($aggregateClass, SnapshotableAggregateRoot::class)) {
             /** @var class-string<SnapshotableAggregateRoot<AggregateIdentity>> $aggregateClass */
-            return new SnapshotRepository($repository, $this->snapshots, $this->streamReader, $this->heads, $aggregateClass, $config['id'], $config['category']);
+            return new SnapshotRepository($repository, $this->snapshots, $this->streamReader, $this->heads, $aggregateClass, $config['id'], new StreamCategory($config['category']));
         }
 
         return $repository;

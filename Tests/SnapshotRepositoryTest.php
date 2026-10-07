@@ -34,6 +34,7 @@ use Storm\Contracts\Chronicler\StorageFailure;
 use Storm\Message\Header;
 use Storm\Message\Message;
 use Storm\Serializer\Exception\SerializationException;
+use Storm\Stream\StreamCategory;
 use Throwable;
 
 final class SnapshotRepositoryTest extends TestCase
@@ -58,7 +59,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         $this->expectException(AggregateTypeMismatch::class);
@@ -85,7 +86,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         $repository->store($article);
@@ -117,7 +118,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         $this->assertSame($fallback, $repository->retrieve($id));
@@ -140,7 +141,7 @@ final class SnapshotRepositoryTest extends TestCase
         $eventStore = $this->createMock(StreamReader::class);
         $eventStore->expects($this->never())->method('retrieveByFilter');
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $this->assertSame($fallback, $repository->retrieve($id));
     }
@@ -167,7 +168,7 @@ final class SnapshotRepositoryTest extends TestCase
         $inner = $this->createMock(AggregateRepository::class);
         $inner->expects($this->never())->method('retrieve');
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $article = $repository->retrieve($id);
 
@@ -201,7 +202,7 @@ final class SnapshotRepositoryTest extends TestCase
         $inner = $this->createMock(AggregateRepository::class);
         $inner->expects($this->never())->method('retrieve');
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $article = $repository->retrieve($id);
 
@@ -232,7 +233,7 @@ final class SnapshotRepositoryTest extends TestCase
         $inner = $this->createMock(AggregateRepository::class);
         $inner->expects($this->once())->method('retrieve')->with($id)->willReturn($fallback);
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), SnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $this->assertSame($fallback, $repository->retrieve($id));
     }
@@ -268,7 +269,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         try {
@@ -308,7 +309,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         try {
@@ -338,7 +339,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         try {
@@ -366,7 +367,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         try {
@@ -439,7 +440,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         try {
@@ -490,7 +491,7 @@ final class SnapshotRepositoryTest extends TestCase
         $eventStore = $this->createStub(StreamReader::class);
         $eventStore->method('retrieveByFilter')->willReturn(self::tailSince(42)); // empty tail
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(0), SnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(0), SnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $this->assertNull($repository->retrieve($id));
     }
@@ -520,7 +521,7 @@ final class SnapshotRepositoryTest extends TestCase
         $eventStore = $this->createStub(StreamReader::class);
         $eventStore->method('retrieveByFilter')->willReturn(self::tailSince(42)); // empty tail after v42
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(1), SnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(1), SnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $this->assertSame($truth, $repository->retrieve($id));
     }
@@ -551,7 +552,7 @@ final class SnapshotRepositoryTest extends TestCase
         $inner = $this->createMock(AggregateRepository::class);
         $inner->expects($this->never())->method('retrieve'); // served from cache, no full replay
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(5), SnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(5), SnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $article = $repository->retrieve($id);
 
@@ -583,7 +584,7 @@ final class SnapshotRepositoryTest extends TestCase
         $eventStore = $this->createStub(StreamReader::class);
         $eventStore->method('retrieveByFilter')->willReturn(self::tailSince(1));
 
-        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), PickySnapshotArticle::class, ArticleId::class, 'article');
+        $repository = new SnapshotRepository($inner, $snapshots, $eventStore, self::liveStreams(), PickySnapshotArticle::class, ArticleId::class, new StreamCategory('article'));
 
         $this->assertSame($replayed, $repository->retrieve($id));
     }
@@ -619,7 +620,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         $this->expectException(CorruptStreamHistory::class);
@@ -660,7 +661,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         $this->expectException(CorruptStreamHistory::class);
@@ -702,7 +703,7 @@ final class SnapshotRepositoryTest extends TestCase
             self::liveStreams(),
             SnapshotArticle::class,
             ArticleId::class,
-            'article',
+            new StreamCategory('article'),
         );
 
         $this->expectException(CorruptStreamHistory::class);

@@ -52,7 +52,7 @@ final readonly class DbalSnapshotStore implements SnapshotStore
     public function load(string $stream): ?Snapshot
     {
         $row = $this->connection->fetchAssociative(
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             'SELECT stream, aggregate_type, version, state, created_at FROM snapshots WHERE stream = :stream',
             ['stream' => $stream],
         );
@@ -103,7 +103,7 @@ final readonly class DbalSnapshotStore implements SnapshotStore
 
         try {
             $this->connection->executeStatement(
-                /** @lang PostgreSQL */
+                /* language=PostgreSQL */
                 'DELETE FROM snapshots WHERE stream = :stream',
                 ['stream' => $stream],
             );
@@ -136,7 +136,7 @@ final readonly class DbalSnapshotStore implements SnapshotStore
     public function save(Snapshot $snapshot): void
     {
         $this->connection->executeStatement(
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             <<<'SQL'
                 INSERT INTO snapshots (stream, aggregate_type, version, state, created_at)
                 VALUES (:stream, :aggregate_type, :version, CAST(:state AS jsonb), :created_at)
@@ -165,7 +165,7 @@ final readonly class DbalSnapshotStore implements SnapshotStore
     public function delete(string $stream): bool
     {
         return $this->connection->executeStatement(
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             'DELETE FROM snapshots WHERE stream = :stream',
             ['stream' => $stream],
         ) > 0;
@@ -185,17 +185,25 @@ final readonly class DbalSnapshotStore implements SnapshotStore
         // sweep. The lower bound also seeds the cursor, and a bare category stream, which carries
         // no qualifier to rebuild an identity from, falls outside the range on purpose.
         //
-        // Reading that bound in BYTES is exactly what `stream_heads.stream COLLATE "C"` buys. Under a
-        // libc locale collation punctuation weighs less than letters, so `category.` sorts BELOW every
-        // stream of the category and this returns nothing, with no error to show for it.
+        // That bound only holds in BYTES. Under a libc locale collation punctuation weighs less than
+        // letters, so `category.` sorts BELOW every stream of the category and the range is empty,
+        // with no error to show for it. The column is pinned to `C`, and the comparisons and the order
+        // repeat it: on the pinned column the collations coincide and the primary key serves the
+        // range, and on a column whose pin has drifted the range stays right, only slower.
+        //
+        // The join names no collation, on purpose: its two columns are a pair. When one side falls
+        // to the database default, the comparison resolves under the pinned side, the rows stay
+        // right and the default side's index no longer serves it. When one side carries another
+        // named collation, PostgreSQL cannot choose between the two and refuses the query, so the
+        // sweep fails instead of answering.
         return $this->connection->fetchFirstColumn(
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             <<<'SQL'
                 SELECT h.stream
                 FROM stream_heads h
                 LEFT JOIN snapshots s ON s.stream = h.stream
-                WHERE h.stream > :cursor
-                  AND h.stream < :upper
+                WHERE h.stream COLLATE "C" > :cursor
+                  AND h.stream COLLATE "C" < :upper
                   AND (
                         ( h.last_version - COALESCE(s.version, 0) >= :threshold
                           AND ( s.created_at IS NULL
@@ -205,7 +213,7 @@ final readonly class DbalSnapshotStore implements SnapshotStore
                           AND h.last_version - COALESCE(s.version, 0) >= 1
                           AND s.created_at < now() - (CAST(:max_age AS int) * interval '1 second') )
                       )
-                ORDER BY h.stream
+                ORDER BY h.stream COLLATE "C"
                 LIMIT :batch
                 SQL,
             ['cursor' => $after ?? $category.'-', 'upper' => $category.'.', 'threshold' => $threshold, 'max_age' => $maxAge, 'min_interval' => $minInterval, 'batch' => $batch],
@@ -221,7 +229,7 @@ final readonly class DbalSnapshotStore implements SnapshotStore
     public function countOrphans(): int
     {
         return (int) $this->connection->fetchOne(
-            /** @lang PostgreSQL */
+            /* language=PostgreSQL */
             'SELECT count(*) FROM snapshots s WHERE NOT EXISTS (SELECT 1 FROM stream_heads h WHERE h.stream = s.stream)',
         );
     }
